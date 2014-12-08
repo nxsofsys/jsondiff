@@ -24,6 +24,7 @@ SOFTWARE.
 
 from collections import MutableMapping, MutableSequence
 from collections import namedtuple, defaultdict
+from numbers import Number
 import itertools
 
 _compare_info = namedtuple('_compare_info', 'ops removed added')
@@ -59,12 +60,13 @@ def _print_op(op):
 
 def _restore_op(info, index):
         op = info.ops[index]
+        info.ops[index] = None
         key = op.key
-        if isinstance(key, basestring):
+        if not isinstance(key, Number):
             return op
         for i in xrange(index+1, len(info.ops)):
             his = info.ops[i]
-            if his == None:
+            if not his:
                 continue
             if type(his) == _op_move:
                 if his.oldpath == op.path:
@@ -88,13 +90,28 @@ def _restore_op(info, index):
                             his = info.ops[i] = his._replace(
                                 key = his.key + 1)
             if type(his) == _op_remove:
-                if his.path == op.path and his.key < key:
-                    key -= 1
+                if his.path == op.path:
+                    if his.key < key:
+                        key -= 1
+                    else:
+                        if type(op) == _op_add:
+                            his = info.ops[i] = his._replace(
+                                key = his.key - 1)
+                        elif type(op) == _op_remove:
+                            his = info.ops[i] = his._replace(
+                                key = his.key + 1)
             if type(his) == _op_add:
-                if his.path == op.path and his.key <= key:
-                    key += 1
-        if type(key) == _op_add and key > 0:
-            key -= 1
+                if his.path == op.path:
+                    if his.key <= key:
+                        key += 1
+                    else:
+                        if type(op) == _op_add:
+                            his = info.ops[i] = his._replace(
+                                key = his.key - 1)
+                        elif type(op) == _op_remove:
+                            his = info.ops[i] = his._replace(
+                                key = his.key + 1)
+
         return op._replace(key = key)
 
 def _item_added(path, key, info, item):
@@ -105,7 +122,8 @@ def _item_added(path, key, info, item):
             del info.removed[frozen]
         op = _restore_op(info, index)
         info.ops[index] = None
-        info.ops.append(_op_move(op.path, op.key, path, key))
+        if path != op.path or key != op.key:
+            info.ops.append(_op_move(op.path, op.key, path, key))
     else:
         info.added[frozen].append(len(info.ops))
         info.ops.append(_op_add(path ,key, item))
@@ -116,9 +134,12 @@ def _item_removed(path, key, info, item):
         index = info.added[frozen].pop(0)
         if not info.added[frozen]:
             del info.added[frozen]
+        op = info.ops[index]
         op = _restore_op(info, index)
-        info.ops[index] = None
-        info.ops.append(_op_move(path, key, op.path, op.key))
+        if path == op.path and isinstance(key, Number) and key > 0:
+            key -= 1
+        if path != op.path or key != op.key:
+            info.ops.append(_op_move(path, key, op.path, op.key))
     else:
         info.removed[frozen].append(len(info.ops))
         info.ops.append(_op_remove(path, key))
@@ -138,15 +159,18 @@ def _compare_dicts(path, info, src, dst):
 
 def _compare_lists(path, info, src, dst):
     key = max(len(src), len(dst))
+    offset = 0
     values = list(itertools.izip_longest(src, dst))
-    for key in xrange(key-1, -1, -1):
+    for key in xrange(key):
         old, new = values[key]
-        if old != None and new != None:
-            _compare_values(_path_join(path, key), info, old, new)
-        elif old != None:
-            _item_removed(path, key, info, old)
-        elif new != None:
-            _item_added(path, key, info, new)
+        # if old != None and new != None:
+        #     _compare_values(_path_join(path, key), info, old, new)
+        if old != None:
+            _item_removed(path, key+offset, info, old)
+            if new == None:
+                offset -= 1
+        if new != None:
+            _item_added(path, key+offset, info, new)
 
 def _compare_values(path, info, src, dst):
     if src == dst:

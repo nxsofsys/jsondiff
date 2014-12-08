@@ -93,6 +93,8 @@ def _restore_op(info, index):
             if type(his) == _op_add:
                 if his.path == op.path and his.key <= key:
                     key += 1
+        if type(key) == _op_add and key > 0:
+            key -= 1
         return op._replace(key = key)
 
 def _item_added(path, key, info, item):
@@ -101,7 +103,6 @@ def _item_added(path, key, info, item):
         index = info.removed[frozen].pop(0)
         if not info.removed[frozen]:
             del info.removed[frozen]
-        
         op = _restore_op(info, index)
         info.ops[index] = None
         info.ops.append(_op_move(op.path, op.key, path, key))
@@ -117,7 +118,7 @@ def _item_removed(path, key, info, item):
             del info.added[frozen]
         op = _restore_op(info, index)
         info.ops[index] = None
-        info.ops.append(_op_move(path, key, op.path, op.key-1 if op.key > 0 else op.key))
+        info.ops.append(_op_move(path, key, op.path, op.key))
     else:
         info.removed[frozen].append(len(info.ops))
         info.ops.append(_op_remove(path, key))
@@ -140,11 +141,11 @@ def _compare_lists(path, info, src, dst):
     values = list(itertools.izip_longest(src, dst))
     for key in xrange(key-1, -1, -1):
         old, new = values[key]
-        # if old != None and new != None:
-        #     _compare_values(_path_join(path, key), info, old, new)
-        if old != None:
+        if old != None and new != None:
+            _compare_values(_path_join(path, key), info, old, new)
+        elif old != None:
             _item_removed(path, key, info, old)
-        if new != None:
+        elif new != None:
             _item_added(path, key, info, new)
 
 def _compare_values(path, info, src, dst):

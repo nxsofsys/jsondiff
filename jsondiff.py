@@ -22,233 +22,248 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 '''
 
-from collections import MutableMapping, MutableSequence
-from collections import namedtuple, defaultdict
-from numbers import Number
-import itertools
+__all__ = ["make",] 
 
-_compare_info = namedtuple('_compare_info', 'ops removed added')
-_op_add = namedtuple('_op_add', 'path key value')
-_op_remove = namedtuple('_op_remove', 'path key value')
-_op_replace = namedtuple('_op_replace', 'path value')
-_op_move = namedtuple('_op_move', 'oldpath oldkey path key')
-
-def _freeze(item):
-    if isinstance(item, MutableMapping):
-        result = frozenset(((key, _freeze(value)) for key, value in item.iteritems()))
-        return result
-    elif isinstance(item, MutableSequence):
-        result = frozenset((_freeze(value) for value in item))
-        return result
+def _store_index(a, x, v):
+    lo = 0
+    hi = len(a)
+    while lo < hi:
+        mid = (lo+hi)//2
+        if a[mid][0] < x: lo = mid+1
+        else: hi = mid
+    if lo < len(a) and a[lo][0] == x:
+        a[lo][1].append(v)
     else:
-        return item
+        a.insert(lo, (x, [v]))
+
+def _take_index(a, x):
+    lo = 0
+    hi = len(a)
+    while lo < hi:
+        mid = (lo+hi)//2
+        if a[mid][0] < x: lo = mid+1
+        else: hi = mid
+    if lo < len(a) and a[lo][0] == x:
+        if a[lo][1]:
+            return a[lo][1].pop()
+    return None
+
+class _compare_info(object):
+    def __init__(self):
+        self.removed = []
+        self.added   = []
+        self.__root = root = []
+        root[:] = [root, root, None]
+
+    def insert(self, op):
+        root = self.__root
+        last = root[0]
+        last[1] = root[0] = [last, root, op]
+        return root[0]
+
+    def remove(self, index):
+        link_prev, link_next, _ = index
+        link_prev[1] = link_next
+        link_next[0] = link_prev
+        index[:] = []
+
+    def iterfrom(self, start):
+        root = self.__root
+        curr = start[1]
+        while curr is not root:
+            yield curr[2]
+            curr = curr[1]
+
+    def __iter__(self):
+        root = self.__root
+        curr = root[1]
+        while curr is not root:
+            yield curr[2]
+            curr = curr[1]
+
+class _op_base(object):
+    def __init__(self, path, key, value):
+        self.path  = path
+        self.key   = key
+        self.value = value
+
+    def __repr__(self):
+        return str(self.get())
+
+class _op_add(_op_base):
+    def _on_undo_remove(self, path, key):
+        if self.path == path:
+            if self.key > key:
+                self.key += 1
+            else:
+                key += 1
+        return key
+
+    def _on_undo_add(self, path, key):
+        if self.path == path:
+            if self.key > key:
+                self.key -= 1
+            else:
+                key += 1
+        return key
+
+    def get(self):
+        return {'op': 'add', 'path': _path_join(self.path, self.key), 'value': self.value}
+
+class _op_remove(_op_base):
+    def _on_undo_remove(self, path, key):
+        if self.path == path:
+            if self.key >= key:
+                self.key += 1
+            else:
+                key -= 1
+        return key
+
+    def _on_undo_add(self, path, key):
+        if self.path == path:
+            if self.key > key:
+                self.key -= 1
+            else:
+                key -= 1
+        return key
+
+    def get(self):
+        return {'op': 'remove', 'path': _path_join(self.path, self.key)}
+
+class _op_replace(_op_base):
+    def _on_undo_remove(self, path, key):
+        return key
+
+    def _on_undo_add(self, path, key):
+        return key
+
+    def get(self):
+        return {'op': 'replace', 'path': _path_join(self.path, self.key), 'value': self.value}
+
+class _op_move(object):
+    def __init__(self, oldpath, oldkey, path, key):
+        self.oldpath = oldpath
+        self.oldkey  = oldkey
+        self.path    = path
+        self.key     = key
+
+    def _on_undo_remove(self, path, key):
+        if self.oldpath == path:
+            if self.oldkey >= key:
+                self.oldkey += 1
+            else:
+                key -= 1
+        if self.path == path:
+            if self.key >= key:
+                self.key += 1
+            else:
+                key += 1
+        return key
+
+    def _on_undo_add(self, path, key):
+        if self.oldpath == path:
+            if self.oldkey > key:
+                self.oldkey -= 1
+            else:
+                key -= 1
+        if self.path == path:
+            if self.key > key:
+                self.key -= 1
+            else:
+                key += 1
+        return key
+
+    def get(self):
+        return {'op': 'move', 'path': _path_join(self.path, self.key), 'from': _path_join(self.oldpath, self.oldkey)}
+    
+    def __repr__(self):
+        return str(self.get())
 
 def _path_join(path, key):
-    return path + '/' + unicode(key).replace('~', '~0').replace('/', '~1')
-
-def _print_op(op):
-    if not op:
-        return
-    if type(op) == _op_add:
-        print {'op': 'add', 'path': _path_join(op.path, op.key), 'value': op.value}
-    elif type(op) == _op_remove:
-        print {'op': 'remove', 'path': _path_join(op.path, op.key), 'value': op.value}
-    elif type(op) == _op_replace:
-        print {'op': 'replace', 'path': op.path, 'value': op.value}
-    elif type(op) == _op_move:
-        print {'op': 'move', 'path': _path_join(op.path, op.key), 'from': _path_join(op.oldpath, op.oldkey)}
-
-def _restore_op(info, index):
-        op = info.ops[index]
-        info.ops[index] = None
-        key = op.key
-        if not isinstance(key, Number):
-            return op
-        for i in xrange(index+1, len(info.ops)):
-            his = info.ops[i]
-            if not his:
-                continue
-            if type(his) == _op_move:
-                if his.oldpath == op.path:
-                    if his.oldkey < key:
-                        key -= 1
-                    else:
-                        if type(op) == _op_add:
-                            his = info.ops[i] = his._replace(
-                                oldkey = his.oldkey - 1)
-                        elif type(op) == _op_remove:
-                            his = info.ops[i] = his._replace(
-                                oldkey = his.oldkey + 1) 
-                if his.path == op.path:
-                    if his.key <= key:
-                        key += 1
-                    else:
-                        if type(op) == _op_add:
-                            his = info.ops[i] = his._replace(
-                                key = his.key - 1)
-                        elif type(op) == _op_remove:
-                            his = info.ops[i] = his._replace(
-                                key = his.key + 1)
-            if type(his) == _op_remove:
-                if his.path == op.path:
-                    if his.key < key:
-                        key -= 1
-                    else:
-                        if type(op) == _op_add:
-                            his = info.ops[i] = his._replace(
-                                key = his.key - 1)
-                        elif type(op) == _op_remove:
-                            his = info.ops[i] = his._replace(
-                                key = his.key + 1)
-            if type(his) == _op_add:
-                if his.path == op.path:
-                    if his.key <= key:
-                        key += 1
-                    else:
-                        if type(op) == _op_add:
-                            his = info.ops[i] = his._replace(
-                                key = his.key - 1)
-                        elif type(op) == _op_remove:
-                            his = info.ops[i] = his._replace(
-                                key = his.key + 1)
-
-        return op._replace(key = key)
+    if key != None:
+        return path + '/' + str(key).replace('~', '~0').replace('/', '~1')
+    return path
 
 def _item_added(path, key, info, item):
-    frozen = _freeze(item)
-    if frozen in info.removed:
-        index = None
-        for i, idx in enumerate(info.removed[frozen]):
-            op = info.ops[idx]
-            if op.path == path:
-                index = idx
-                del info.removed[frozen][i]
-                if not info.removed[frozen]:
-                    del info.removed[frozen]
-                break
-        if index != None:
-            op = _restore_op(info, index)
-            if path != op.path or key != op.key:
-                info.ops.append(_op_move(op.path, op.key, path, key))
-                if path != op.path:
-                    return False
-            return
-
-    info.added[frozen].append(len(info.ops))
-    info.ops.append(_op_add(path ,key, item))
+    index = _take_index(info.removed, item)
+    if index != None:
+        op = index[2]
+        if type(op.key) == int:
+            for v in info.iterfrom(index):
+                op.key = v._on_undo_remove(op.path, op.key)
+        info.remove(index)
+        if op.path != path or op.key != key:
+            new_op = _op_move(op.path, op.key, path, key)
+            info.insert(new_op)
+    else:
+        new_op = _op_add(path, key, item)
+        new_index = info.insert(new_op)
+        _store_index(info.added, item, new_index)
+        return new_index
 
 def _item_removed(path, key, info, item):
-    frozen = _freeze(item)
-    if frozen in info.added:
-        index = None
-        for i, idx in enumerate(info.added[frozen]):
-            op = info.ops[idx]
-            if op.path == path:
-                index = idx
-                del info.added[frozen][i]
-                if not info.added[frozen]:
-                    del info.added[frozen]
-                break
-        if index != None:
-            op = _restore_op(info, index)
-            if path == op.path and isinstance(key, Number) and key > 0:
-                key -= 1
-            if path != op.path or key != op.key:
-                info.ops.append(_op_move(path, key, op.path, op.key))
-            return
+    new_op = _op_remove(path, key, item)
+    index = _take_index(info.added, item)
+    new_index = info.insert(new_op)
+    if index != None:
+        op = index[2]
+        if type(op.key) == int:
+            for v in info.iterfrom(index):
+                op.key = v._on_undo_add(op.path, op.key)
+        info.remove(index)
+        if new_op.path != op.path or new_op.key != op.key:
+            new_op = _op_move(new_op.path, new_op.key, op.path, op.key)
+            new_index[2] = new_op
+        else:
+            info.remove(new_index)
+    else:
+        _store_index(info.removed, item, new_index)
+        return new_index
 
-    info.removed[frozen].append(len(info.ops))
-    info.ops.append(_op_remove(path, key, item))
-
-def _item_replaced(path, info, item):
-    info.ops.append(_op_replace(path, item))
+def _item_replaced(path, key, info, item):
+    info.insert(_op_replace(path, key, item))
 
 def _compare_dicts(path, info, src, dst):
     added_keys = dst.viewkeys() - src.viewkeys()
     removed_keys = src.viewkeys() - dst.viewkeys()
-    for key in added_keys:
-        _item_added(path, str(key), info, dst[key])
     for key in removed_keys:
         _item_removed(path, str(key), info, src[key])
+    for key in added_keys:
+        _item_added(path, str(key), info, dst[key])
     for key in src.viewkeys() & dst.viewkeys():
-        _compare_values(_path_join(path, key), info, src[key], dst[key])
+        _compare_values(path, key, info, src[key], dst[key])
 
 def _compare_lists(path, info, src, dst):
-    key = max(len(src), len(dst))
-    offset = 0
-    values = list(itertools.izip_longest(src, dst))
-    for key in xrange(key):
-        old, new = values[key]
-        # if old != None and new != None:
-        #     _compare_values(_path_join(path, key), info, old, new)
-        if old != None:
-            _item_removed(path, key+offset, info, old)
-            if new == None:
-                offset -= 1
-        if new != None:
-            _item_added(path, key+offset, info, new)
+    len_src, len_dst = len(src), len(dst)
+    max_len = max(len_src, len_dst)
+    min_len = min(len_src, len_dst)
+    pairs = []
+    for key in xrange(max_len):
+        if key < min_len:
+            old, new = src[key], dst[key]
+            if old == new:
+                continue
+            removed_idx = _item_removed(path, key, info, old)
+            added_idx = _item_added(path, key, info, new)
+            pairs.append((removed_idx, added_idx))
+        elif len_src > len_dst:
+            _item_removed(path, len_dst, info, src[key])
+        else:
+            _item_added(path, key, info, dst[key])
 
-
-def _compare_values(path, info, src, dst):
+def _compare_values(path, key, info, src, dst):
     if src == dst:
         return
-    elif isinstance(src, MutableMapping) and \
-            isinstance(dst, MutableMapping):
-        _compare_dicts(path, info, src, dst)
-    elif isinstance(src, MutableSequence) and \
-            isinstance(dst, MutableSequence):
-        _compare_lists(path, info, src, dst)
+    elif isinstance(src, dict) and \
+            isinstance(dst, dict):
+        _compare_dicts(_path_join(path, key), info, src, dst)
+    elif isinstance(src, list) and \
+            isinstance(dst, list):
+        _compare_lists(_path_join(path, key), info, src, dst)
     else:
-        _item_replaced(path, info, dst)
-
-def _execute(info):
-    # i = 0
-    # while i < len(info.ops):
-    #     paths = defaultdict(lambda: ([],[]))
-    #     while i < len(info.ops):
-    #         op = info.ops[i]
-    #         if type(op) == _op_add:
-    #             paths[_path_join(op.path, op.key)][0].append(i)
-    #         if type(op) == _op_remove:
-    #             paths[_path_join(op.path, op.key)][1].append(i)
-    #         i += 1
-    #     for path, ops in paths.iteritems():
-    #         for add_idx, remove_idx in zip(ops[0],ops[1]):
-    #             src = info.ops[remove_idx].value
-    #             dst = info.ops[add_idx].value
-    #             value = _freeze(src)
-    #             info.removed[value].remove(remove_idx)
-    #             if not info.removed[value]:
-    #                 del info.removed[value]
-    #             value = _freeze(dst)
-    #             info.added[value].remove(add_idx)
-    #             if not info.added[value]:
-    #                 del info.added[value]
-    #             info.ops[add_idx] = None
-    #             info.ops[remove_idx] = None
-    #             if isinstance(src, MutableMapping) and \
-    #                     isinstance(dst, MutableMapping):
-    #                 _compare_dicts(path, info, src, dst)
-    #             elif isinstance(src, MutableSequence) and \
-    #                     isinstance(dst, MutableSequence):
-    #                 _compare_lists(path, info, src, dst)
-    #             else:
-    #                 _item_replaced(path, info, dst)
-    for op in info.ops:
-        if not op:
-            continue
-        if type(op) == _op_add:
-            yield {'op': 'add', 'path': _path_join(op.path, op.key), 'value': op.value}
-        elif type(op) == _op_remove:
-            yield {'op': 'remove', 'path': _path_join(op.path, op.key)}
-        elif type(op) == _op_replace:
-            yield {'op': 'replace', 'path': op.path, 'value': op.value}
-        elif type(op) == _op_move:
-            yield {'op': 'move', 'path': _path_join(op.path, op.key), 'from': _path_join(op.oldpath, op.oldkey)}
+        _item_replaced(path, key, info, dst)
 
 def make(src, dst, **kwargs):
-    result = []
-    info = _compare_info([], defaultdict(list), defaultdict(list))
-    path = ''
-    _compare_values(path, info, src, dst)
-    return [v for v in _execute(info)]
+    info = _compare_info()
+    _compare_values('', None, info, src, dst)
+    return [op.get() for op in info]

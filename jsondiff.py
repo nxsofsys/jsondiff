@@ -199,7 +199,6 @@ def _item_added(path, key, info, item):
         new_op = _op_add(path, key, item)
         new_index = info.insert(new_op)
         _store_index(info.added, item, new_index)
-        return new_index
 
 def _item_removed(path, key, info, item):
     new_op = _op_remove(path, key, item)
@@ -218,7 +217,6 @@ def _item_removed(path, key, info, item):
             info.remove(new_index)
     else:
         _store_index(info.removed, item, new_index)
-        return new_index
 
 def _item_replaced(path, key, info, item):
     info.insert(_op_replace(path, key, item))
@@ -237,15 +235,13 @@ def _compare_lists(path, info, src, dst):
     len_src, len_dst = len(src), len(dst)
     max_len = max(len_src, len_dst)
     min_len = min(len_src, len_dst)
-    pairs = []
     for key in xrange(max_len):
         if key < min_len:
             old, new = src[key], dst[key]
             if old == new:
                 continue
-            removed_idx = _item_removed(path, key, info, old)
-            added_idx = _item_added(path, key, info, new)
-            pairs.append((removed_idx, added_idx))
+            _item_removed(path, key, info, old)
+            _item_added(path, key, info, new)
         elif len_src > len_dst:
             _item_removed(path, len_dst, info, src[key])
         else:

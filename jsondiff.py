@@ -22,6 +22,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 '''
 
+
 __all__ = ["make",] 
 
 def _store_index(a, x, v):
@@ -67,7 +68,7 @@ class _compare_info(object):
         link_next[0] = link_prev
         index[:] = []
 
-    def iterfrom(self, start):
+    def iter_from(self, start):
         root = self.__root
         curr = start[1]
         while curr is not root:
@@ -80,6 +81,22 @@ class _compare_info(object):
         while curr is not root:
             yield curr[2]
             curr = curr[1]
+
+    def execute(self):
+        root = self.__root
+        curr = root[1]
+        while curr is not root:
+            if curr[1] is not root:
+                op_first, op_second = curr[2], curr[1][2]
+                if op_first.key == op_second.key and \
+                        op_first.path == op_second.path and \
+                        type(op_first) == _op_remove and \
+                        type(op_second) == _op_add:
+                    yield _op_replace(op_second.path, op_second.key, op_second.value).get()
+                    curr = curr[1][1]
+                    continue
+            yield curr[2].get()
+            curr = curr[1]   
 
 class _op_base(object):
     def __init__(self, path, key, value):
@@ -154,7 +171,7 @@ class _op_move(object):
             else:
                 key -= 1
         if self.path == path:
-            if self.key >= key:
+            if self.key > key:
                 self.key += 1
             else:
                 key += 1
@@ -189,7 +206,7 @@ def _item_added(path, key, info, item):
     if index != None:
         op = index[2]
         if type(op.key) == int:
-            for v in info.iterfrom(index):
+            for v in info.iter_from(index):
                 op.key = v._on_undo_remove(op.path, op.key)
         info.remove(index)
         if op.path != path or op.key != key:
@@ -207,7 +224,7 @@ def _item_removed(path, key, info, item):
     if index != None:
         op = index[2]
         if type(op.key) == int:
-            for v in info.iterfrom(index):
+            for v in info.iter_from(index):
                 op.key = v._on_undo_add(op.path, op.key)
         info.remove(index)
         if new_op.path != op.path or new_op.key != op.key:
@@ -262,4 +279,4 @@ def _compare_values(path, key, info, src, dst):
 def make(src, dst, **kwargs):
     info = _compare_info()
     _compare_values('', None, info, src, dst)
-    return [op.get() for op in info]
+    return [op for op in info.execute()]

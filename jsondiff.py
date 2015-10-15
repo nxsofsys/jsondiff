@@ -23,7 +23,7 @@ SOFTWARE.
 '''
 
 
-__all__ = ["make",] 
+__all__ = ["make",]
 
 def _store_index(a, x, v):
     lo = 0
@@ -96,7 +96,7 @@ class _compare_info(object):
                     curr = curr[1][1]
                     continue
             yield curr[2].get()
-            curr = curr[1]   
+            curr = curr[1]
 
 class _op_base(object):
     def __init__(self, path, key, value):
@@ -192,7 +192,7 @@ class _op_move(object):
 
     def get(self):
         return {'op': 'move', 'path': _path_join(self.path, self.key), 'from': _path_join(self.oldpath, self.oldkey)}
-    
+
     def __repr__(self):
         return str(self.get())
 
@@ -239,20 +239,20 @@ def _item_replaced(path, key, info, item):
     info.insert(_op_replace(path, key, item))
 
 def _compare_dicts(path, info, src, dst):
-    added_keys = dst.viewkeys() - src.viewkeys()
-    removed_keys = src.viewkeys() - dst.viewkeys()
+    added_keys = set(dst.keys()) - set(src.keys())
+    removed_keys = set(src.keys()) - set(dst.keys())
     for key in removed_keys:
         _item_removed(path, str(key), info, src[key])
     for key in added_keys:
         _item_added(path, str(key), info, dst[key])
-    for key in src.viewkeys() & dst.viewkeys():
+    for key in set(src.keys()) & set(dst.keys()):
         _compare_values(path, key, info, src[key], dst[key])
 
 def _compare_lists(path, info, src, dst):
     len_src, len_dst = len(src), len(dst)
     max_len = max(len_src, len_dst)
     min_len = min(len_src, len_dst)
-    for key in xrange(max_len):
+    for key in range(max_len):
         if key < min_len:
             old, new = src[key], dst[key]
             if old == new:

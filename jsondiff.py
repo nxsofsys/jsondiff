@@ -23,7 +23,7 @@ SOFTWARE.
 '''
 
 
-__all__ = ["make",] 
+__all__ = ["make",]
 
 def _store_index(a, x, v):
     lo = 0
@@ -96,7 +96,7 @@ class _compare_info(object):
                     curr = curr[1][1]
                     continue
             yield curr[2].get()
-            curr = curr[1]   
+            curr = curr[1]
 
 class _op_base(object):
     def __init__(self, path, key, value):
@@ -192,7 +192,7 @@ class _op_move(object):
 
     def get(self):
         return {'op': 'move', 'path': _path_join(self.path, self.key), 'from': _path_join(self.oldpath, self.oldkey)}
-    
+
     def __repr__(self):
         return str(self.get())
 

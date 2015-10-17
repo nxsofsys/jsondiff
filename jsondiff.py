@@ -22,39 +22,49 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 '''
 
+import sys
 
 __all__ = ["make",]
 
-def _store_index(a, x, v):
-    lo = 0
-    hi = len(a)
-    while lo < hi:
-        mid = (lo+hi)//2
-        if a[mid][0] < x: lo = mid+1
-        else: hi = mid
-    if lo < len(a) and a[lo][0] == x:
-        a[lo][1].append(v)
-    else:
-        a.insert(lo, (x, [v]))
+if sys.version_info[0] >= 3:
+    _range = range
+    _viewkeys = dict.keys
+else:
+    _range = xrange
+    _viewkeys = dict.viewkeys
 
-def _take_index(a, x):
-    lo = 0
-    hi = len(a)
-    while lo < hi:
-        mid = (lo+hi)//2
-        if a[mid][0] < x: lo = mid+1
-        else: hi = mid
-    if lo < len(a) and a[lo][0] == x:
-        if a[lo][1]:
-            return a[lo][1].pop()
-    return None
+_ST_ADD    = 0
+_ST_REMOVE = 1
 
 class _compare_info(object):
+
     def __init__(self):
-        self.removed = []
-        self.added   = []
+        self.index_storage = [{}, {}]
+        self.index_storage2 = [[], []]
         self.__root = root = []
         root[:] = [root, root, None]
+
+    def store_index(self, value, index, st):
+        try:
+            storage = self.index_storage[st]
+            stored = storage.get(value)
+            if stored == None:
+                storage[value] = [index]
+            else:
+                storage[value].append(index)
+        except TypeError:
+            self.index_storage2[st].append((value, index))
+
+    def take_index(self, value, st):
+        try:
+            stored = self.index_storage[st].get(value)
+            if stored:
+                return stored.pop()
+        except TypeError:
+            storage = self.index_storage2[st]
+            for i in range(len(storage)-1, -1, -1):
+                if storage[i][0] == value:
+                    return storage.pop(i)[1]
 
     def insert(self, op):
         root = self.__root
@@ -202,7 +212,7 @@ def _path_join(path, key):
     return path
 
 def _item_added(path, key, info, item):
-    index = _take_index(info.removed, item)
+    index = info.take_index(item, _ST_REMOVE)
     if index != None:
         op = index[2]
         if type(op.key) == int:
@@ -215,11 +225,11 @@ def _item_added(path, key, info, item):
     else:
         new_op = _op_add(path, key, item)
         new_index = info.insert(new_op)
-        _store_index(info.added, item, new_index)
+        info.store_index(item, new_index, _ST_ADD)
 
 def _item_removed(path, key, info, item):
     new_op = _op_remove(path, key, item)
-    index = _take_index(info.added, item)
+    index = info.take_index(item, _ST_ADD)
     new_index = info.insert(new_op)
     if index != None:
         op = index[2]
@@ -233,26 +243,28 @@ def _item_removed(path, key, info, item):
         else:
             info.remove(new_index)
     else:
-        _store_index(info.removed, item, new_index)
+        info.store_index(item, new_index, _ST_REMOVE)
 
 def _item_replaced(path, key, info, item):
     info.insert(_op_replace(path, key, item))
 
 def _compare_dicts(path, info, src, dst):
-    added_keys = set(dst.keys()) - set(src.keys())
-    removed_keys = set(src.keys()) - set(dst.keys())
+    src_keys = _viewkeys(src)
+    dst_keys = _viewkeys(dst)
+    added_keys = dst_keys - src_keys
+    removed_keys = src_keys - dst_keys
     for key in removed_keys:
         _item_removed(path, str(key), info, src[key])
     for key in added_keys:
         _item_added(path, str(key), info, dst[key])
-    for key in set(src.keys()) & set(dst.keys()):
+    for key in src_keys & dst_keys:
         _compare_values(path, key, info, src[key], dst[key])
 
 def _compare_lists(path, info, src, dst):
     len_src, len_dst = len(src), len(dst)
     max_len = max(len_src, len_dst)
     min_len = min(len_src, len_dst)
-    for key in range(max_len):
+    for key in _range(max_len):
         if key < min_len:
             old, new = src[key], dst[key]
             if old == new:

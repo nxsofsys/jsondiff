@@ -31,7 +31,10 @@ if sys.version_info[0] >= 3:
     _viewkeys = dict.keys
 else:
     _range = xrange
-    _viewkeys = dict.viewkeys
+    if sys.version_info[1] >= 7:
+        _viewkeys = dict.viewkeys
+    else:
+        _viewkeys = lambda x: set(dict.keys(x))
 
 _ST_ADD    = 0
 _ST_REMOVE = 1

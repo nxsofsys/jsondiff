@@ -280,15 +280,13 @@ def _compare_lists(path, info, src, dst):
             _item_added(path, key, info, dst[key])
 
 def _compare_values(path, key, info, src, dst):
-    if src == dst:
-        return
-    elif isinstance(src, dict) and \
+    if isinstance(src, dict) and \
             isinstance(dst, dict):
         _compare_dicts(_path_join(path, key), info, src, dst)
     elif isinstance(src, list) and \
             isinstance(dst, list):
         _compare_lists(_path_join(path, key), info, src, dst)
-    else:
+    elif src != dst:
         _item_replaced(path, key, info, dst)
 
 def make(src, dst, **kwargs):

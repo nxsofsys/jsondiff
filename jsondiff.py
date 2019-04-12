@@ -1,4 +1,3 @@
-* Python script, ASCII text executable, with CRLF line terminators
 '''
 The MIT License (MIT)
 Copyright (c) 2019 Ilya Volkov

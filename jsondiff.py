@@ -1,3 +1,4 @@
+* Python script, ASCII text executable, with CRLF line terminators
 '''
 The MIT License (MIT)
 Copyright (c) 2019 Ilya Volkov
@@ -111,6 +112,51 @@ def _find_moved(ctx):
                 else:
                     ops[a] = None
 
+def _process_next(ctx):
+    ops = ctx.ops
+    l = len(ops)
+    a = 0
+    b = 1
+    changed = False
+
+    while b < l:
+        op_first = ops[a]
+        op_second = ops[b]
+
+        if op_second is None:
+            b += 1
+            continue
+        elif (type(op_first) != _op_remove or 
+                type(op_second) != _op_add or 
+                op_first.path != op_second.path):
+            a = b
+            b += 1
+            continue
+
+        path = op_first.path
+        src = op_first.value
+        dst = op_second.value
+        if isinstance(src, dict) and \
+                isinstance(dst, dict):
+            insert = ctx._replace(ops=[])
+            _compare_dicts(path, insert, src, dst)
+        elif isinstance(src, list) and \
+                isinstance(dst, list):
+            insert = ctx._replace(ops=[])
+            _compare_lists(path, insert, src, dst)
+        else:
+            a = b
+            b += 1
+            continue
+
+        changed = True
+        ops[a:b+1] = insert.ops
+        a = a + len(insert.ops)
+        b = a + 1
+        l = len(ops)
+
+    return changed
+
 def _find_replaced(ctx):
     ops = ctx.ops
     l = len(ops)
@@ -131,28 +177,25 @@ def _find_replaced(ctx):
             a = b
             b += 1
             continue
-        changed = True
-        insert = ctx._replace(ops=[])
-        _compare_values(
-            op_second.path,
-            insert,
-            op_first.value,
-            op_second.value)
 
-        ops[a:b+1] = insert.ops
-        
-        a = a + len(insert.ops)
+
+        ops[a] = _op_replace(op_second.path, op_second.value)
+        ops[b] = None
+
+        a = b + 1
         b = a + 1
-        l = len(ops)
+        
     return changed
+
 
 def _optimize(ctx):
     ops = ctx.ops
     for i in range(ctx.opt_iterations):
         _find_moved(ctx)
-        result = _find_replaced(ctx)
+        result = _process_next(ctx)
         if not result:
-            return
+            break
+    _find_replaced(ctx)
 
 def _execute(ctx):
     _optimize(ctx)
@@ -173,7 +216,7 @@ class _op_add(_op_base):
     def _on_undo_remove(self, path):
         l = len(path) - 1
         if len(self.path) > l and self.path[:l] ==  path[:-1]:
-            if self.path[l] > path[-1]:
+            if self.path[l] >= path[-1]:
                 self.path[l] += 1
             else:
                 path[-1] += 1
@@ -222,10 +265,20 @@ class _op_remove(_op_base):
 class _op_replace(_op_base):
 
     def _on_undo_remove(self, path):
-        pass
+        l = len(path) - 1
+        if len(self.path) > l and self.path[:l] ==  path[:-1]:
+            if self.path[l] >= path[-1]:
+                self.path[l] += 1
+            else:
+                path[-1] -= 1
 
     def _on_undo_add(self, path):
-        pass
+        l = len(path) - 1
+        if len(self.path) > l and self.path[:l] ==  path[:-1]:
+            if self.path[l] > path[-1]:
+                self.path[l] -= 1
+            else:
+                path[-1] -= 1
 
     def get(self):
         return {'op': 'replace', 
@@ -247,7 +300,7 @@ class _op_move(object):
             else:
                 path[-1] -= 1
         if len(self.path) > l and self.path[:l] ==  path[:-1]:
-            if self.path[l] > path[-1]:
+            if self.path[l] >= path[-1]:
                 self.path[l] += 1
             else:
                 path[-1] += 1
